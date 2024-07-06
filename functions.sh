@@ -13,33 +13,34 @@ function get_size_in_mb {
         *[M|m]B) echo ${1%[M|m]B} ;;
         *[G|g]B) echo $((${1%[G|g]B} * 1024)) ;;
         *[T|t]B) echo $((${1%[T|t]B} * 1024 * 1024)) ;;
-        *) fatal "Invalid --size" ;;
+        *) echo ${1} ;;
     esac
 }
 
 # Function to return MB value of --size
 function drive_size(){
-    param_required "size"
-    echo "$(get_size_in_mb "$1")"
+    echo "$(get_size_in_mb "${params[size]}")"
 }
 
-# Function to use --parent and return the .disk-workspaces path
-function workspace_storage_path(){
-    param_required "parent"
-    echo "$(realpath "${params[parent]}")/.disk-workspaces"
+function workspace_drive_path(){
+    echo "$(workspaces_storage_path)/$(disk_image_name)"
+}
+
+# Function to use --parent and return the .disks path
+function workspaces_storage_path(){
+    echo "$(realpath "${params[parent]}")/.disks"
 }
 
 # Function to return the path to the workspace directory
-# workspace_directory "${params[name]}"
+# workspace_directory 
 function workspace_directory(){
-    local name=$1
-    echo "$(workspace_storage_path)/${name}_$(date +"%Y-%m")"
+    local name="${params[name]}"
+    echo "$(workspaces_storage_path)/${name}_$(date +"%Y-%m")"
 }
 
 # Function to return the name of the disk image based on --mount
 function disk_image_name(){
-    param_required "name"
-    echo "${params[name]}.img"
+    echo "$(basename "$(workspace_directory)").img"
 }
 
 function encrypted(){
@@ -47,10 +48,6 @@ function encrypted(){
 }
 
 function mount_path(){
-    # Validations
-    param_required "parent"
-    param_required "name"
-    
     # Arguments
     local p="${params[parent]}"
     local n="${params[name]}"
@@ -210,47 +207,47 @@ GREEN_BG=$(tput setab 2)
 
 # Function to inform the user of something important
 function banner_info {
-    printf "${BOLD}${WHITE_BG}${BLACK_TEXT}\n\n%s\n\n${NORMAL}\n" "$1"
+    printf "${BOLD}${WHITE_BG}${BLACK}%s${NORMAL}\n" "$1"
 }
 
 # Function for when things may go wrong
 function banner_warning {
-    printf "${BOLD}${YELLOW_BG}${BLACK_TEXT}\n\n%s\n\n${NORMAL}\n" "$1"
+    printf "${BOLD}${YELLOW_BG}${BLACK}%s${NORMAL}\n" "$1"
 }
 
 # Function for when major errors happen
 function banner_error {
-    printf "${BOLD}${RED_BG}${WHITE_TEXT}\n\n%s\n\n${NORMAL}\n" "$1"
+    printf "${BOLD}${RED_BG}${WHITE}%s${NORMAL}\n" "$1"
 }
 
 # Function for when major success happens
 function banner_success {
-    printf "${BOLD}${GREEN_BG}${WHITE_TEXT}\n\n%s\n\n${NORMAL}\n" "$1"
+    printf "${BOLD}${GREEN_BG}${BLACK}%s${NORMAL}\n" "$1"
 }
 
 # Info function: bold white text on no background
 function info() {
-    printf "${BOLD}${WHITE}\n%s\n${NORMAL}\n" "[INFO] ${1}"
+    printf "${BOLD}${WHITE}%s${NORMAL}\n" "[INFO] ${1}"
 }
 
 # Error function: bold red text on no background
 function error() {
-    printf "${BOLD}${RED}\n%s\n${NORMAL}\n" "[ERROR] ${1}"
+    printf "${BOLD}${RED}%s${NORMAL}\n" "[ERROR] $1"
 }
 
 # Warning function: bold yellow text on no background
 function warning() {
-    printf "${BOLD}${YELLOW}\n%s\n${NORMAL}\n" "[WARNING] ${1}"
+    printf "${BOLD}${YELLOW}%s${NORMAL}\n" "[WARNING] ${1}"
 }
 
 # Success function: bold green text on no background
 function success() {
-    printf "${BOLD}${GREEN}\n%s\n${NORMAL}\n" "[SUCCESS] ${1}"
+    printf "${BOLD}${GREEN}%s${NORMAL}\n" "[SUCCESS] ${1}"
 }
 
 # Debug function: bold white text on no background
 function debug() {
-    [[ -n "${DEBUG:-}" ]] && printf "${BOLD}${WHITE}\n%s\n${NORMAL}\n" "[DEBUG] ${1}"
+    [[ -n "${DEBUG:-}" ]] && printf "${WHITE}%s${NORMAL}\n" "[DEBUG] ${1}"
 }
 
 # Replaces line with error message
@@ -282,6 +279,19 @@ function rsuccess() {
 function fatal() { 
     local msg="${1:-UnexpectedError}"
     error "[FATAL] ${msg}"
+    local i=0
+    local funcname=""
+    local lineno=""
+    local srcfile=""
+    
+    error "Stack trace:"
+    while caller $i 1> /dev/null; do
+        ((i++))
+        funcname="${FUNCNAME[$i]}"
+        lineno="${BASH_LINENO[$i-1]}"
+        srcfile="${BASH_SOURCE[$i]}"
+        error "  at ${funcname}() in ${srcfile}:${lineno}"
+    done
     exit 1
 }
 
