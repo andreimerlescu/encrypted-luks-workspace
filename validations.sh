@@ -30,13 +30,19 @@ function validate_action_unschedule(){
 }
 
 function validate_action_mount(){
-    echo
-
+    if [[ "${params[sudo]}" != true ]] && [ `id -u` -ne 0 ]; then
+        fatal "Root permission required to modify or create workspaces. Please add --sudo"
+    fi
+    param_required "name" || fatal "--name required"
+    log "validate_action_mount() passed all validations!"
 }
 
 function validate_action_unmount(){
-    echo
-
+    if [[ "${params[sudo]}" != true ]] && [ `id -u` -ne 0 ]; then
+        fatal "Root permission required to modify or create workspaces. Please add --sudo"
+    fi
+    param_required "name" || fatal "--name required"
+    log "validate_action_unmount() passed all validations!"
 }
 
 function validate_action_passwd(){

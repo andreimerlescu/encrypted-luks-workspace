@@ -13,7 +13,7 @@ function action_list(){
 function action_new(){
     validate_action_new || fatal "Failed to validate action."
 
-    is_duplicate_workspace_name && fatal "Another workspace already exists by the name: ${params[name]}"
+    workspace_exists && fatal "Another workspace already exists by the name: ${params[name]}"
 
     create_disk_image || fatal "Failed to create disk image."
 
@@ -49,13 +49,60 @@ function action_unschedule(){
 }
 
 function action_mount(){
-    banner_info "MOUNT"
     validate_action_mount || fatal "Failed to validate action."
+
+    local device_name
+    device_name="$(device_name)"
+
+    workspace_doesnt_exist && fatal "No such workspace recognized."
+
+    info "Mounting filesystem..."
+    mount_drive
+
+    if encrypted; then
+        info "Decrypting filesystem..."
+        open_encrypted_disk
+    fi
+
+    info "Creating workspace symbolic link..."
+    create_workspace_symlink
+
+    success "Mounted ${params[name]} to $(home_alias_path)!"
+
 }
 
 function action_unmount(){
-    banner_info "UNMOUNT"
     validate_action_unmount || fatal "Failed to validate action."
+
+    local device_name
+    device_name="$(device_name)"
+
+    workspace_doesnt_exist && fatal "No such workspace recognized."
+
+    if ! confirm_action_prompt "Are you sure you wish to unmount ${params[name]}, via $(home_alias_path)?" 45; then
+        fatal "Aborted program at user request."
+    fi
+
+    info "Checking device usage..."
+    check_device_in_use
+
+    info "Unmounting filesystem..."
+    unmount_filesystem 
+
+    if encrypted; then
+        info "Closing LUKS device..."
+        close_encrypted_disk
+    fi
+
+    info "Detaching loop device..."
+    detach_loop_device
+
+    info "Removing symlink..."
+    remove_symbolic_link
+
+    info "Cleaning up system..."
+    clear_blkid_cache
+
 }
 
 function action_passwd(){
@@ -69,8 +116,10 @@ function action_remove(){
     local device_name
     device_name="$(device_name)"
 
-    if [[ "${params[duplicates]}" == false ]]; then
-        ! is_duplicate_workspace_name && fatal "No such workspace recognized."
+    workspace_doesnt_exist && fatal "No such workspace recognized."
+
+    if ! confirm_action_prompt "Are you sure you wish to remove ${params[name]}, via $(home_alias_path)?" 45; then
+        fatal "Aborted program at user request."
     fi
 
     info "Unmounting filesystem..."
@@ -267,6 +316,51 @@ function format_new_encrypted_disk(){
     true
 }
 
+# Function to check if a device is in use using lsof
+# check_device_in_use # returns:""
+function check_device_in_use() {
+    local device_path=$(device_name)
+
+    # Validations
+    if [[ -z "${device_path}" ]]; then
+        fatal "check_device_in_use() requires a device path to be defined. Got: '${device_path}'"
+    fi
+
+    # Check if the device is in use
+    if lsof "${device_path}" &> /dev/null; then
+        local lsof_output
+        lsof_output=$(lsof -t "${device_path}")
+
+        # Prepare markdown table headers and values
+        local headers=("PID" "Process")
+        local pids=()
+        local processes=()
+        while IFS= read -r pid; do
+            pids+=("${pid}")
+            processes+=($(ps -p "${pid}" -o comm=))
+        done <<< "${lsof_output}"
+
+        # Calculate column widths
+        local pid_width
+        pid_width=$(get_column_width "${headers[0]}" "${pids[@]}")
+        local process_width
+        process_width=$(get_column_width "${headers[1]}" "${processes[@]}")
+        local widths=($pid_width $process_width)
+
+        # Create markdown table
+        local table
+        table+=$(create_table_row widths[@] "${headers[@]}")"\n"
+        table+=$(create_table_row widths[@] "---" "---")"\n"
+        for i in "${!pids[@]}"; do
+            table+=$(create_table_row widths[@] "${pids[$i]}" "${processes[$i]}")"\n"
+        done
+
+        fatal "Workspace ${params[name]} is currently in use by one or more processes.\n\n${table}"
+    else
+        log "check_device_in_use() device ${device_path} is not in use."
+    fi
+}
+
 # Function to close an encrypted disk
 # close_encrypted_disk # returns:""
 function close_encrypted_disk(){
@@ -367,7 +461,7 @@ function create_workspace_symlink(){
 
     # Actions
     set +C
-    $SUDO ln -s "$(home_alias_path)" "${mount}"
+    $SUDO ln -s "${mount}" "$(home_alias_path)"
     set -C
     [[ -n $DEBUG ]] && ls -la "${params[parent]}"
     log "create_workspace_symlink() created symbolic link at $(home_alias_path) pointing to ${mount}"
@@ -416,7 +510,7 @@ function add_to_index(){
     # Properties
     local mount=$(mount_path)
     local size=$(drive_size)
-    local index_file="$(workspaces_storage_path)/.index"
+    local index_file="$(index_path)"
     local disk_usage=$(sudo du -sh "$mount" | cut -f1)
     local status
     { encrypted && status="encrypted"; } || status="unencrypted"
@@ -427,9 +521,30 @@ function add_to_index(){
     true
 }
 
+# Function to remove the current ${params[name]} and $(mount_path) from the index file
+function remove_from_index() {
+    # Properties
+    local index_file="$(index_path)"
+    local mount_path="$(mount_path)"
+    local name="${params[name]}"
+
+    # Validations
+    [[ -z "${name}" ]] && fatal "remove_from_index() requires --name to be defined. Got: '${name}'"
+    [[ -z "${mount_path}" ]] && fatal "remove_from_index() requires mount_path to be defined. Got: '${mount_path}'"
+    [[ ! -f "${index_file}" ]] && warning "Index file not found: ${index_file}" && return 0
+
+    # Actions
+    SECONDS=0
+    $SUDO sed -i "/${mount_path}/d" "${index_file}"
+    log "remove_from_index() removed entry for ${mount_path} from ${index_file}"
+    log "remove_from_index() took $SECONDS to complete"
+    true
+}
+
+
 # Function to check disk utilization and create warnings if necessary
 function check_disk_utilization {
-    local index_file="$1"
+    local index_file="$(index_path)"
     while IFS='@@@' read -r name mount size encrypt disk_usage; do
         utilization=$(df --output=pcent "$mount" | tail -n 1 | tr -d '% ')
         if (( utilization >= 90 )); then
@@ -452,11 +567,15 @@ function remove_old_warnings {
     done
 }
 
-# Function to check if workspace is already used
-function is_duplicate_workspace_name(){
+function workspace_doesnt_exist(){
+    local exists=$(workspace_exists)
+    { [[ "${exists}" == false ]] && return 0; } || return 1;
+}
+
+function workspace_exists(){
     local index_file=$(index_path)
     $SUDO touch "${index_file}"
-    log "is_duplicate_workspace_name() touched index file ${index_file}"
+    log "workspace_exists() touched index file ${index_file}"
     local mount_path=$(mount_path)
     local exists=false
     while IFS='@@@' read -r name mount size encrypt disk_usage; do
@@ -465,14 +584,14 @@ function is_duplicate_workspace_name(){
             exists=true
         fi
     done < "$index_file"
-    $exists
+    { [[ "${exists}" == true ]] && return 0; } || return 1;
 }
 
 # Function to sync the elwork disks directory to the index file
 function sync_index(){
     local index=$(index_path)
-    $SUDO touch "${index_file}"
-    log "sync_index() touched index file ${index_file}"
+    $SUDO touch "${index}"
+    log "sync_index() touched index file ${index}"
 
     check_disk_utilization "$index"
     manage_full_disks "$index"

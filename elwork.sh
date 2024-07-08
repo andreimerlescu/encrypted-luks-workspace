@@ -50,6 +50,7 @@ function main() {
 
     info "Correcting permissions on --parent..."
     $SUDO chown -R $(whoami):$(whoami) "${params[parent]}"
+    [[ -n "${params[log]}" ]] && [[ -f "${params[log]}" ]] && $SUDO chown -R $(whoami):$(whoami) "${params[log]}"
     success "Script has completed execution!"
 
 }

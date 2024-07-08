@@ -92,6 +92,29 @@ function masked_password(){
     echo "$(mask "$(password)")"
 }
 
+# Function to prompt user for Y/N response
+# confirm_action_prompt <question> [<timeout=369>]
+# confirm_action_prompt "Are you sure you want to do this?" 45
+function confirm_action_prompt(){
+    local response
+    local status=false # assume no
+    local -i tries=0
+    while true; do 
+        read -r -t "${2:-369}" -p "${1} (y/n): " response
+        echo
+        if [[ "${response}" =~ ^([Yy]|[Yy][Ee][Ss]|[Tt][Rr][Uu][Ee]|[Tt])$ ]]; then
+            status=true
+        elif [[ "${response}" =~ ^([Nn]|[Nn][Oo]|[Ff][Aa][Ll][Ss][Ee]|[Ff])$ ]]; then
+            status=false
+        else
+            warning "Invalid response: '${response}'"
+            continue
+        fi
+        break
+    done
+    { $status && return 0; } || return 1
+}
+
 # Function to retrieve password
 function retrieve_password {
     local p=""
@@ -330,10 +353,35 @@ function fatal() {
     exit 1
 }
 
+# Function to calculate the width of a column
+# get_column_width <column values>
+function get_column_width() {
+    local max_length=0
+    for value in "$@"; do
+        if [[ ${#value} -gt $max_length ]]; then
+            max_length=${#value}
+        fi
+    done
+    echo $max_length
+}
+
+# Function to create a markdown table row
+# create_table_row <column widths> <values>
+function create_table_row() {
+    local widths=("${!1}")
+    shift
+    local values=("$@")
+    local row="|"
+    for i in "${!values[@]}"; do
+        row+=" $(printf "%-${widths[$i]}s" "${values[$i]}") |"
+    done
+    echo "$row"
+}
+
 # Function to log to a file
 function log(){
-    ! [[ -d "$(dirname "${params[log]}")/logs" ]] && mkdir -p "$(dirname "${params[log]}")" && log "log() created $(dirname "${params[log]}")/logs"
-    ! [[ -d "$(dirname "${params[log]}")/logs" ]] && fatal "Cannot write to the --log directory ${params[log]}."
+    [[ ! -d "$(dirname "${params[log]}")" ]] && mkdir -p "$(dirname "${params[log]}")" && log "log() created $(dirname "${params[log]}")"
+    [[ ! -d "$(dirname "${params[log]}")" ]] && fatal "Cannot write to the --log directory ${params[log]}."
     # Properties
     local msg
     local caller_info
@@ -342,7 +390,7 @@ function log(){
 
     caller_info=$(caller 0)
     lineno=$(echo "$caller_info" | awk '{print $1}')
-    srcfile=$(echo "$caller_info" | awk '{print $2}')
+    srcfile=$(echo "$caller_info" | awk '{print $3}')
 
     msg="[$(date +"%Y-%m-%d %H:%M:%S")] [$srcfile:$lineno] ${1}"
 
