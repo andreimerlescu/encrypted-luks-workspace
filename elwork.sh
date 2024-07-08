@@ -31,24 +31,26 @@ function main() {
         debug "${p} = ${params[$p]}"
     done
 
-    info "Creating the directory required for elwork to live..."
     create_workspaces_storage_directory || fatal "Failed to create workspaces directory."
-    success "Created $(workspaces_storage_path)!"
 
     case "${params[action]}" in
-        unmount|umount) action_unmount ;;
-        rm|remove|uninstall) action_remove ;; 
-        archive) action_archive ;;
-        replace) action_replace ;; 
-        change) action_change ;;
-        list) action_list ;;
-        new|create) action_new ;;
-        rotate|schedule) action_rotate ;;
-        unschedule) action_unschedule ;;
-        mount) action_mount ;; 
-        pass|passwd|password) action_passwd ;;
+        um|unmount|umount) action_unmount ;;
+        remove|delete|destroy|purge|obliterate) action_remove ;; 
+        ar|archive) action_archive ;;
+        re|replace) action_replace ;; 
+        ch|change) action_change ;;
+        li|list) action_list ;;
+        ne|new|cr|create|st|start) action_new ;;
+        ro|rotate|schedule) action_rotate ;;
+        un|unschedule) action_unschedule ;;
+        mo|mount) action_mount ;; 
+        pa|pass|passwd|password) action_passwd ;;
         *) fatal "unsupported action chosen $1" ;;
     esac
+
+    info "Correcting permissions on --parent..."
+    $SUDO chown -R $(whoami):$(whoami) "${params[parent]}"
+    success "Script has completed execution!"
 
 }
 

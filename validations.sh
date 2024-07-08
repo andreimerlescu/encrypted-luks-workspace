@@ -2,13 +2,14 @@
 
 [[ -z "${INSIDE_ELWORK}" ]] && { echo "FATAL ERROR: This function cannot be executed on its own."; exit 1; }
 
-
 function validate_action_list(){
     echo
 }
 
 function validate_action_new(){
-    banner_warning "Validating action: NEW"
+    if [[ "${params[sudo]}" != true ]] && [ `id -u` -ne 0 ]; then
+        fatal "Root permission required to modify or create workspaces. Please add --sudo"
+    fi
     param_required "name" || fatal "--name required"
     param_required "parent" || fatal "--parent required"
     param_required "size" || fatal "--size required"
@@ -16,7 +17,6 @@ function validate_action_new(){
     flag_required "sudo" || fatal "--sudo required"
     require_param_if_flag_true "password" "encrypt" || fatal "--password required for --encrypt"
     log "validate_action_new() passed all validations!"
-    success "Validated action: NEW!"
 }
 
 function validate_action_rotate(){
@@ -45,8 +45,11 @@ function validate_action_passwd(){
 }
 
 function validate_action_remove(){
-    echo
-
+    if [[ "${params[sudo]}" != true ]] && [ `id -u` -ne 0 ]; then
+        fatal "Root permission required to modify or create workspaces. Please add --sudo"
+    fi
+    param_required "name" || fatal "--name required"
+    log "validate_action_remove() passed all validations!"
 }
 
 function validate_action_archive(){
@@ -75,7 +78,7 @@ function is_writable_dir() {
 # param_required "parent" # returns:""
 function param_required(){
     local p=$1
-    [[ "${p}" == "password" ]] && [[ -z "${params[$p]}" ]] && params[$p]=$(retrieve_password)
+    [[ "${p}" == "password" ]] && [[ ${#params[$p]} -le 3 ]] && retrieve_password
     { [[ -z "${p}" ]] && fatal "--${p} required"; } || true
 }
 
@@ -87,10 +90,10 @@ function flag_required(){
 }
 
 # Function to require a provided param given the true set flag
-# require_param_if_flag_true "${params[password]}" "${params[encrypt]}"
+# require_param_if_flag_true "password" "encrypt"
 function require_param_if_flag_true() {
     local p=$1
     local f=$2
-    [[ "${f}" == "encrypt" ]] && [[ -z "${params[$p]}" ]] && params[password]=$(retrieve_password)
-    { [[ "${f}" == true ]] && param_required $p; } || true
+    [[ "${f}" == "encrypt" ]] && encrypted && [[ ${#params[$p]} -le 3 ]] && retrieve_password
+    { [[ "${params[$f]}" == true ]] && param_required $p; } || true
 }

@@ -31,6 +31,17 @@ function workspaces_storage_path(){
     echo "$(realpath "${params[parent]}")/.disks"
 }
 
+# Function to return the luks device name
+function device_name(){
+    local device_name
+    if [[ -z "${params[date]}" ]]; then
+        device_name="encrypted-elwork-${params[name]}-$(date +"%Y-%m")"
+    else
+        device_name="encrypted-elwork-${params[name]}-${params[date]}"
+    fi
+    echo $device_name
+}
+
 # Function to return the path to the workspace directory
 # workspace_directory 
 function workspace_directory(){
@@ -62,8 +73,19 @@ function mount_path(){
 }
 
 function password(){
-    [[ -z "${params[password]}" ]] && params[$p]=$(retrieve_password)
+    if [[ -z "${params[password]}" ]]; then 
+        retrieve_password
+    fi
     echo "${params[password]}"
+}
+
+# Function to assign the symbolic link
+function home_alias_path(){
+    echo "${HOME}/el-${params[name]}"
+}
+
+function index_path(){
+    echo "$(workspaces_storage_path)/.index"
 }
 
 function masked_password(){
@@ -73,27 +95,48 @@ function masked_password(){
 # Function to retrieve password
 function retrieve_password {
     local p=""
-    if command -v pinentry-curses > /dev/null; then
-        p=$(echo "GETPIN" | pinentry-curses | awk '/^D /{print $2}')
-    else
+    local go=true
+    local -i tries=0
+    while [[ "${go}" == true ]]; do 
         read -s -p "Enter password: " p
         echo
-    fi
-    echo $p
-}
-
-function log(){
-    local msg=$1
-    [[ -z "${msg}" ]] && return
-    ! [[ -f "${params[log]}" ]] && echo $msg | $SUDO tee -a "${params[log]}" > /dev/null
+        if [[ ${#p} -le 3 ]]; then
+            warning "Cannot accept ${p} as the password. Please try again."
+            ((tries++))
+            if (( tries < 17 )); then
+                continue
+            else
+                go=false
+                break
+            fi
+        else
+            local c
+            read -s -p "Confirm password: " c
+            echo
+            if [[ "${c}" != "${p}" ]] || [[ ${#c} -le 3 ]]; then
+                warning "Passwords did not match! First was ${#p} chars, confirmation was ${#c} chars. Please try again."
+                ((tries++))
+                if (( tries < 17 )); then
+                    continue
+                fi
+            fi
+            success "We've accepted your password! This will be used for encrypting your new workspace."
+            go=false
+            break
+        fi
+    done
+    [[ ${#p} -le 3 ]] && fatal "Invalid password provided. Cannot continue."
+    params[password]=$p
+    true
 }
 
 # Function to parse CLI arguments
-parse_arguments() {
+function parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             debug|--debug) 
                 DEBUG="--debug"
+                params[debug]=true
                 set -x
                 shift
                 continue 
@@ -101,6 +144,7 @@ parse_arguments() {
 
             sudo|--sudo)
                 SUDO="sudo"
+                params[sudo]=true
                 shift
                 continue
                 ;;
@@ -190,21 +234,6 @@ function print_history() {
   done
 }
 
-# Define color and style codes
-BOLD=$(tput bold)
-NORMAL=$(tput sgr0)
-
-RED=$(tput setaf 1)
-YELLOW=$(tput setaf 3)
-GREEN=$(tput setaf 2)
-WHITE=$(tput setaf 7)
-BLACK=$(tput setaf 0)
-
-WHITE_BG=$(tput setab 7)
-YELLOW_BG=$(tput setab 3)
-RED_BG=$(tput setab 1)
-GREEN_BG=$(tput setab 2)
-
 # Function to inform the user of something important
 function banner_info {
     printf "${BOLD}${WHITE_BG}${BLACK}%s${NORMAL}\n" "$1"
@@ -247,7 +276,9 @@ function success() {
 
 # Debug function: bold white text on no background
 function debug() {
+    set +x
     [[ -n "${DEBUG:-}" ]] && printf "${WHITE}%s${NORMAL}\n" "[DEBUG] ${1}"
+    [[ -n "${DEBUG:-}" ]] && set -x
 }
 
 # Replaces line with error message
@@ -277,22 +308,49 @@ function rsuccess() {
 
 # Prints an error message then exits
 function fatal() { 
-    local msg="${1:-UnexpectedError}"
-    error "[FATAL] ${msg}"
+    # Properties
     local i=0
     local funcname=""
     local lineno=""
     local srcfile=""
-    
-    error "Stack trace:"
-    while caller $i 1> /dev/null; do
-        ((i++))
-        funcname="${FUNCNAME[$i]}"
-        lineno="${BASH_LINENO[$i-1]}"
-        srcfile="${BASH_SOURCE[$i]}"
-        error "  at ${funcname}() in ${srcfile}:${lineno}"
-    done
+    local msg="${1:-UnexpectedError}"
+
+    # Actions
+    error "[FATAL] ${msg}"
+    if [[ "${params[trace]}" == true ]]; then
+        error "Stack trace:"
+        while caller $i 1> /dev/null; do
+            ((i++))
+            funcname="${FUNCNAME[$i]}"
+            lineno="${BASH_LINENO[$i-1]}"
+            srcfile="${BASH_SOURCE[$i]}"
+            error "  at ${funcname}() in ${srcfile}:${lineno}"
+        done
+    fi
     exit 1
+}
+
+# Function to log to a file
+function log(){
+    ! [[ -d "$(dirname "${params[log]}")/logs" ]] && mkdir -p "$(dirname "${params[log]}")" && log "log() created $(dirname "${params[log]}")/logs"
+    ! [[ -d "$(dirname "${params[log]}")/logs" ]] && fatal "Cannot write to the --log directory ${params[log]}."
+    # Properties
+    local msg
+    local caller_info
+    local lineno
+    local srcfile
+
+    caller_info=$(caller 0)
+    lineno=$(echo "$caller_info" | awk '{print $1}')
+    srcfile=$(echo "$caller_info" | awk '{print $2}')
+
+    msg="[$(date +"%Y-%m-%d %H:%M:%S")] [$srcfile:$lineno] ${1}"
+
+    # Validations
+    [[ -z "${msg}" ]] && return
+
+    # Actions
+    echo $msg | $SUDO tee -a "${params[log]}" > /dev/null
 }
 
 # Adds first argument of spaces to the 2nd argument
@@ -336,6 +394,6 @@ function repeat() {
 # mask "pass" # returns:"****"
 function mask(){
     local what=$1
-    repeat "*", "${#what}"
+    repeat "*" "${#what}"
 }
 
